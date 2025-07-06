@@ -1,1 +1,5 @@
 /build/
+/build-openfhe/
+/build-seal/
+/install-seal/
+/install-openfhe/

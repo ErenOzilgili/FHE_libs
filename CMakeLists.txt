@@ -1,11 +1,17 @@
+#SEPERATE BUILT VERSION
+#--------------------
 cmake_minimum_required(VERSION 3.14)
 project(FHE_libs LANGUAGES CXX)
 
-# Add SEAL submodule first so it's built and available
-add_subdirectory(external/SEAL EXCLUDE_FROM_ALL)
+# Add the install paths for SEAL and OpenFHE:
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_LIST_DIR}/../install-seal")
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_LIST_DIR}/../install-openfhe")
 
-# Add your SEAL-based tools (SEAL_lib/)
+# Find them as packages:
+find_package(SEAL REQUIRED)
+#find_package(OpenFHEpke REQUIRED)
+
+# Add your custom modules:
 add_subdirectory(SEAL_lib)
+#add_subdirectory(OpenFHE_lib)
 
-# Add any other libraries the same way:
-# add_subdirectory(other_lib)

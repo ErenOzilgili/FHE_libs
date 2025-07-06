@@ -43,10 +43,16 @@ double innerProduct(Ciphertext &first,
 */
 
 void bench(shared_ptr<SEALContext> context,
-                  PublicKey public_key,
-                    SecretKey secret_key,
-                    RelinKeys relin_keys,
-                    GaloisKeys galois_keys,
+                  PublicKey &public_key,
+                    SecretKey &secret_key,
+                    RelinKeys &relin_keys,
+                    GaloisKeys &galois_keys,
+
+                    CKKSEncoder &encoder,
+                    Encryptor &encryptor,
+                    Evaluator &evaluator,
+                    Decryptor &decryptor,
+
                     double scale,
                     int thread_id,
                     double tolerance){
@@ -61,10 +67,12 @@ void bench(shared_ptr<SEALContext> context,
     /*
     Below can also be used among different threads if needed
     */
+    /*
     CKKSEncoder encoder(*context);
     Encryptor encryptor(*context, public_key);
     Evaluator evaluator(*context);
-    Decryptor decryptor(*context, secret_key);   
+    Decryptor decryptor(*context, secret_key); 
+    */  
 
     //Obtain the slot count from the encoder object
     size_t slotCount = encoder.slot_count();
@@ -75,22 +83,24 @@ void bench(shared_ptr<SEALContext> context,
     ///////////////////////////////
     // Prepare the input vector 
     ///////////////////////////////
+    double inputVecInnerRes = 0; //Hold the sum of the slots
     //inputSlotCount --> Nonzero slot count
     /*
     int inputSlotCount = 10;
-    double inputVecSum = 0;
     for(int i = 0; i < inputSlotCount; i++){
         double valuePushed = static_cast<double>((i + 1)) / inputSlotCount;
         input_vec.push_back(valuePushed);
-        inputVecSum += valuePushed*valuePushed;
+        inputVecInnerRes += valuePushed*valuePushed;
     }
     */
     random_device rd;
     mt19937 rng(rd());
     uniform_real_distribution<double> dist(-5.0, 5.0); 
 
-    for (auto &slot : input_vec)
+    for (auto &slot : input_vec){
         slot = dist(rng);
+        inputVecInnerRes += (slot * slot);
+    }
 
     Plaintext plain;
     encoder.encode(input_vec, scale, plain, local_pool);
@@ -115,7 +125,7 @@ void bench(shared_ptr<SEALContext> context,
     //Rotated now holds the correct multiplication result
 
     //Now rotate and sum to obtain the inner product result at the first index
-    for(int steps = 1; steps <= log2(slotCount); steps *= 2){
+    for(int steps = 1; steps < slotCount; steps *= 2){
         evaluator.rotate_vector(result, steps, galois_keys, rotated, local_pool);
         evaluator.add_inplace(result, rotated);
     }
@@ -132,14 +142,12 @@ void bench(shared_ptr<SEALContext> context,
     // Confirm result (If wanted)
     /////////////////////////////////////////////
     //Assert for the confirmation of whether it is done correctly or not
-    /*
-    if(abs(inputVecSum - calcInnerProduct) > tolerance){
+    if(abs(inputVecInnerRes - output_result[0]) > tolerance){
+        cout << "Failed satisfying threshold " << thread_id << ": " <<inputVecInnerRes << " - " << output_result[0] << endl;
         cout << "Aborted! Threshold not satisfied." << endl;
         abort();
     }
-    cout << "Thread no " << thread_id << ": " <<inputVecSum << " - " << calcInnerProduct << endl;
-    */
-
+    //cout << "Thread no " << thread_id << ": " <<inputVecInnerRes << " - " << output_result[0] << endl;
     //cout << "Finished" << endl;
 }
 
@@ -161,24 +169,20 @@ int main(){
     RelinKeys relin_keys;
     keygen.create_relin_keys(relin_keys);
 
-    /*
     CKKSEncoder encoder(*context);
     Encryptor encryptor(*context, public_key);
     Decryptor decryptor(*context, secret_key);
-    Evaluator evaluator(*context);
-    */   
+    Evaluator evaluator(*context);  
 
     double scale = pow(2.0, 40);
-    double tolerance = 1e-6; // (10^-6)
+    double tolerance = 1e-1; // (10^-1)
 
     vector<thread> workers;
     int num_worker_initial = 4;
-    int num_inner_initial = 4; 
+    int num_inner_initial = 4; //Number of inner products done (different randomly generated ciphertexts)
 
     bool doAcrossThreads = true; //Do in parallel or serial
-    /*
-    First loop
-    */
+
     for(int k = 0; k < 2; k++){
         //Do with 4 and 8 cores
         int num_worker = num_worker_initial * (int)(pow(2.0, k));
@@ -197,7 +201,8 @@ int main(){
                 for (int t = 0; t < num_worker; t++) {
                     workers.emplace_back([&, t]() {
                         for (int i = t; i < num_inner; i += num_worker) {
-                            bench(context, public_key, secret_key, relin_keys, galois_keys, scale, i, tolerance);
+                            bench(context, ref(public_key), ref(secret_key), ref(relin_keys), ref(galois_keys), ref(encoder), ref(encryptor), ref(evaluator), ref(decryptor), scale, t, tolerance);
+                            //bench(context, public_key, secret_key, relin_keys, galois_keys, scale, i, tolerance);
                         }
                     });
                 }
@@ -216,7 +221,8 @@ int main(){
                 auto t_start = chrono::high_resolution_clock::now();
 
                 for(int t = 0; t < num_inner; t++){
-                    bench(context, public_key, secret_key, relin_keys, galois_keys, scale, -1, tolerance);
+                    bench(context, ref(public_key), ref(secret_key), ref(relin_keys), ref(galois_keys), ref(encoder), ref(encryptor), ref(evaluator), ref(decryptor), scale, -1, tolerance);
+                    //bench(context, public_key, secret_key, relin_keys, galois_keys, scale, -1, tolerance);
                 }
 
                 //End timer
