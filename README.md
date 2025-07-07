@@ -60,16 +60,212 @@
 
 ## c) Runtimes For Inner Products (CKKS)
 
-### c.1) Microsoft SEAL
-------(Multithreading)
+I have 4 physical and 8 virtual cores, so the thread amounts tried are 4 and 8.
 
+CPU Information
+---------------
+Model: Intel(R) Core(TM) i5-9300H CPU @ 2.40GHz
+Base Clock Speed: 2.40 GHz
+Physical Cores: 4
+Logical Processors (Threads): 8
+Sockets: 1
+Virtualization: Enabled
+Cache:
+  L1 Cache: 256 KB
+  L2 Cache: 1.0 MB
+  L3 Cache: 8.0 MB
+
+CKKS Vectors
+------------
+Polynomial degree was set to 8192 with 4096 slots filled randomly with numbers between (-5.0, 5.0).
+The below times also include the encryption times.
+
+### c.1) Microsoft SEAL
+----------------------
+------(Multithreading)
+----------------------
+
+    All threads finished.
+    With 4 threads -- On 4 ciphertexts, each inner producted with itself.
+    	Total time: 0.102512
+    
+    All threads finished.
+    With 4 threads -- On 8 ciphertexts, each inner producted with itself.
+    	Total time: 0.214751
+    
+    All threads finished.
+    With 4 threads -- On 16 ciphertexts, each inner producted with itself.
+    	Total time: 0.422005
+    
+    All threads finished.
+    With 4 threads -- On 32 ciphertexts, each inner producted with itself.
+    	Total time: 0.83706
+    
+    All threads finished.
+    With 4 threads -- On 64 ciphertexts, each inner producted with itself.
+    	Total time: 1.66186
+    
+    All threads finished.
+    With 4 threads -- On 128 ciphertexts, each inner producted with itself.
+    	Total time: 3.32624
+    
+    All threads finished.
+    With 4 threads -- On 256 ciphertexts, each inner producted with itself.
+    	Total time: 6.68255
+    
+    All threads finished.
+    With 4 threads -- On 512 ciphertexts, each inner producted with itself.
+    	Total time: 13.2479
+    
+    All threads finished.
+    With 4 threads -- On 1024 ciphertexts, each inner producted with itself.
+    	Total time: 26.3365
+    
+    All threads finished.
+    With 4 threads -- On 2048 ciphertexts, each inner producted with itself.
+    	Total time: 52.9306
+    
+    ------------------------------------------
+    ------------------------------------------
+    
+    All threads finished.
+    With 8 threads -- On 4 ciphertexts, each inner producted with itself.
+    	Total time: 0.114328
+    
+    All threads finished.
+    With 8 threads -- On 8 ciphertexts, each inner producted with itself.
+    	Total time: 0.209074
+    
+    All threads finished.
+    With 8 threads -- On 16 ciphertexts, each inner producted with itself.
+    	Total time: 0.419095
+    
+    All threads finished.
+    With 8 threads -- On 32 ciphertexts, each inner producted with itself.
+    	Total time: 0.826162
+    
+    All threads finished.
+    With 8 threads -- On 64 ciphertexts, each inner producted with itself.
+    	Total time: 1.74596
+    
+    All threads finished.
+    With 8 threads -- On 128 ciphertexts, each inner producted with itself.
+    	Total time: 3.42285
+    
+    All threads finished.
+    With 8 threads -- On 256 ciphertexts, each inner producted with itself.
+    	Total time: 6.62158
+    
+    All threads finished.
+    With 8 threads -- On 512 ciphertexts, each inner producted with itself.
+    	Total time: 13.1055
+    
+    All threads finished.
+    With 8 threads -- On 1024 ciphertexts, each inner producted with itself.
+    	Total time: 26.0905
+    
+    All threads finished.
+    With 8 threads -- On 2048 ciphertexts, each inner producted with itself.
+    	Total time: 52.3088
+    
+    ------------------------------------------
+    ------------------------------------------
+
+-------------------------
 ------(No Multithreading)
+-------------------------
+
+    No threads.
+    With 0 threads -- On 4 ciphertexts, each inner producted with itself.
+    	Total time: 0.308585
+    
+    No threads.
+    With 0 threads -- On 8 ciphertexts, each inner producted with itself.
+    	Total time: 0.614652
+    
+    No threads.
+    With 0 threads -- On 16 ciphertexts, each inner producted with itself.
+    	Total time: 1.22699
+    
+    No threads.
+    With 0 threads -- On 32 ciphertexts, each inner producted with itself.
+    	Total time: 2.46338
+    
+    No threads.
+    With 0 threads -- On 64 ciphertexts, each inner producted with itself.
+    	Total time: 4.92607
+    
+    No threads.
+    With 0 threads -- On 128 ciphertexts, each inner producted with itself.
+    	Total time: 9.84045
+    
+    No threads.
+    With 0 threads -- On 256 ciphertexts, each inner producted with itself.
+    	Total time: 19.8526
+    
+    No threads.
+    With 0 threads -- On 512 ciphertexts, each inner producted with itself.
+    	Total time: 39.5042
+    
+    No threads.
+    With 0 threads -- On 1024 ciphertexts, each inner producted with itself.
+    	Total time: 78.6996
+    
+    No threads.
+    With 0 threads -- On 2048 ciphertexts, each inner producted with itself.
+    	Total time: 167.09
+    
+    ------------------------------------------
+    ------------------------------------------
 
 ### c.2) OpenFHE
 
 ------(With OMP disabled - Multithreaded)
 
 ------(With OMP - Multithreaded)
+
+    All threads finished.
+    With 4 threads -- On 4 ciphertexts, each inner producted with itself.
+    	Total time: 1.08249
+    
+    All threads finished.
+    With 4 threads -- On 8 ciphertexts, each inner producted with itself.
+    	Total time: 2.22044
+    
+    All threads finished.
+    With 4 threads -- On 16 ciphertexts, each inner producted with itself.
+    	Total time: 4.63852
+    
+    All threads finished.
+    With 4 threads -- On 32 ciphertexts, each inner producted with itself.
+    	Total time: 8.65749
+    
+    All threads finished.
+    With 4 threads -- On 64 ciphertexts, each inner producted with itself.
+    	Total time: 17.3919
+    
+    All threads finished.
+    With 4 threads -- On 128 ciphertexts, each inner producted with itself.
+    	Total time: 34.5726
+    
+    All threads finished.
+    With 4 threads -- On 256 ciphertexts, each inner producted with itself.
+    	Total time: 68.627
+    
+    All threads finished.
+    With 4 threads -- On 512 ciphertexts, each inner producted with itself.
+    	Total time: 137.238
+    
+    All threads finished.
+    With 4 threads -- On 1024 ciphertexts, each inner producted with itself.
+    	Total time: 273.473
+    
+    All threads finished.
+    With 4 threads -- On 2048 ciphertexts, each inner producted with itself.
+    	Total time: 548.757
+    
+    ------------------------------------------
+    ------------------------------------------
 
 ------(With OMP - No Multithreading)
 
