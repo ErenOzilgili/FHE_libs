@@ -120,6 +120,7 @@ void bench(shared_ptr<SEALContext> context,
     //Multiply once and then relinearize to get the slotwise multiplication
     evaluator.multiply(encrypted, encrypted, multiplied, local_pool);
     evaluator.relinearize_inplace(multiplied, relin_keys, local_pool);
+    evaluator.rescale_to_next_inplace(multiplied, local_pool);
 
     Ciphertext result = multiplied; //Copy the multiplied version
     //Rotated now holds the correct multiplication result
@@ -181,7 +182,7 @@ int main(){
     int num_worker_initial = 4;
     int num_inner_initial = 4; //Number of inner products done (different randomly generated ciphertexts)
 
-    bool doAcrossThreads = true; //Do in parallel or serial
+    bool doAcrossThreads = false; //Do in parallel or serial
 
     for(int k = 0; k < 2; k++){
         //Do with 4 and 8 cores

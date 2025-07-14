@@ -40,6 +40,7 @@ void bench(CryptoContext<DCRTPoly> cc,
 
     //Multiply and Relinearize
     auto multiplied = cc->EvalMultAndRelinearize(encrypted, encrypted);
+    cc->RescaleInPlace(multiplied);
 
     auto result = multiplied;
 
@@ -127,7 +128,7 @@ int main() {
     int num_worker_initial = 4;
     int num_inner_initial = 4; //Number of inner products done (different randomly generated ciphertexts)
 
-    bool doAcrossThreads = false; //Do in parallel or serial
+    bool doAcrossThreads = true; //Do in parallel or serial
 
     for(int k = 0; k < 2; k++){
         //Do with 4 and 8 cores
