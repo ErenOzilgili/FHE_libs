@@ -103,7 +103,7 @@ func main() {
 	encoder := ckks.NewEncoder(params)
 
 	tolerance := 1.0 //CHANGE THIS MECHANISM
-	doParallel := false
+	doParallel := true
 	numWorkerInitial := 4
 	numInnerInitial := 4
 

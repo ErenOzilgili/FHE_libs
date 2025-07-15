@@ -14,8 +14,8 @@ https://github.com/openfheorg/openfhe-development/blob/main/docs/static_docs/Bes
 using namespace lbcrypto;
 using namespace std;
 
-void bench(CryptoContext<DCRTPoly> cc,
-           KeyPair<DCRTPoly> keyPair,
+void bench(CryptoContext<DCRTPoly> &cc,
+           KeyPair<DCRTPoly> &keyPair,
            int thread_id,
            double tolerance) {
 

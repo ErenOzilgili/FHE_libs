@@ -1,10 +1,3 @@
-# This CMakeLists.txt is *inside* SEAL_lib/
-
-# Note: No need for cmake_minimum_required() here.
-# Only top-level needs it.
-
-#SEPERATE BUILT VERSION
-#--------------------
 project(SEAL_lib LANGUAGES CXX)
 
 add_executable(multithread_seal_inner multithread_seal_inner.cpp)
