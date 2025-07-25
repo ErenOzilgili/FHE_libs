@@ -152,7 +152,155 @@ void bench(shared_ptr<SEALContext> context,
     //cout << "Finished" << endl;
 }
 
-int main(){
+Ciphertext TreewiseSum(Evaluator &evaluator, vector<Ciphertext>& cts){
+        if (cts.empty()) {
+        throw invalid_argument("Ciphertext vector is empty.");
+    }
+
+    vector<Ciphertext>& current = cts;
+
+    while (current.size() > 1) {
+        vector<Ciphertext> next;
+
+        for (int i = 0; i < current.size(); i += 2) {
+            if (i + 1 < current.size()) {
+                // Add pairs
+                Ciphertext sum;
+                evaluator.add(current[i], current[i + 1], sum);
+                next.push_back(sum);
+            } else {
+                // Carry forward unmatched ciphertext
+                next.push_back(current[i]);
+            }
+        }
+
+        // Here now alias for next
+        current = std::move(next);
+    }
+
+    return current[0];
+}
+
+void matrixVectorMul(shared_ptr<SEALContext> context,
+                  PublicKey &public_key,
+                    SecretKey &secret_key,
+                    RelinKeys &relin_keys,
+                    GaloisKeys &galois_keys,
+
+                    CKKSEncoder &encoder,
+                    Encryptor &encryptor,
+                    Evaluator &evaluator,
+                    Decryptor &decryptor,
+
+                    int rows,
+                    double scale,
+                    int tid,
+                    double tolerance){
+
+    //Each thread uses its own local memory pool:
+    auto local_pool = MemoryPoolHandle::New();
+
+    //Obtain the slot count from the encoder object
+    int slots = encoder.slot_count();
+
+    int cols = slots;
+
+    mt19937 rng(std::chrono::high_resolution_clock::now().time_since_epoch().count() + tid);
+    uniform_real_distribution<double> dist(-1.0, 1.0); 
+
+    // Initialize matrix and vecto with random doubles
+    vector<vector<double>> mat(rows, vector<double>(cols));
+    vector<double> vec(cols);
+    for (size_t i = 0; i < cols; i++){
+        vec[i] = dist(rng);
+    } 
+    for (size_t i = 0; i < rows; i++){
+        for (size_t j = 0; j < slots; j++){
+            mat[i][j] = dist(rng);
+        }
+    }
+
+    // Encrypt matrix rows
+    vector<Ciphertext> ctMat(rows);
+    for (int i = 0; i < rows; i++) {
+        Plaintext pt;
+        encoder.encode(mat[i], scale, pt, local_pool);
+        encryptor.encrypt(pt, ctMat[i], local_pool);
+    }
+
+    // Encrypt vector
+    Plaintext ptVec;
+    encoder.encode(vec, scale, ptVec, local_pool);
+    Ciphertext ctVec;
+    encryptor.encrypt(ptVec, ctVec, local_pool);
+
+    // Compute inner products
+    vector<Ciphertext> innerResults(rows);
+
+    for (int i = 0; i < rows; i++) {
+        // Create one-hot encoded vector to extract the i-th slot
+        vector<double> oneHot(slots, 0.0);
+        oneHot[i] = 1.0;
+        Plaintext ptHot;
+        encoder.encode(oneHot, scale, ptHot, local_pool);
+        Ciphertext ctHot;
+        encryptor.encrypt(ptHot, ctHot, local_pool);
+
+        // Multiply row i with vector
+        Ciphertext product;
+        evaluator.multiply(ctMat[i], ctVec, product, local_pool);
+        evaluator.relinearize_inplace(product, relin_keys, local_pool);
+        evaluator.rescale_to_next_inplace(product, local_pool);
+
+        // Inner product via rotations and additions
+        Ciphertext res = product;
+        for (int step = 1; step < slots; step *= 2) {
+            Ciphertext rotated;
+            evaluator.rotate_vector(res, step, galois_keys, rotated, local_pool);
+            evaluator.add_inplace(res, rotated);
+        }
+
+
+        //Multiply result with one hot vector
+        auto res_parms_id = res.parms_id();
+        Ciphertext res_;
+        // Ensure ctHot matches res's level
+        evaluator.mod_switch_to_inplace(ctHot, res.parms_id(), local_pool);
+        evaluator.multiply(res, ctHot, res_, local_pool);
+        evaluator.relinearize_inplace(res_, relin_keys, local_pool);
+        evaluator.rescale_to_next_inplace(res_, local_pool);
+
+        innerResults[i] = res_;
+    }
+
+    Ciphertext mulRes = TreewiseSum(evaluator, innerResults);
+
+    // Vector to store the multiplication result
+    Plaintext ptRes;
+    decryptor.decrypt(mulRes, ptRes);
+
+    vector<double> vec_res(rows);
+    encoder.decode(ptRes, vec_res, local_pool);
+
+    for(int i = 0; i < rows; i++){
+        double expVal = 0;
+
+        for(int j = 0; j < cols; j++){
+            expVal += mat[i][j] * vec[j];
+        }
+
+        /*
+        if(abs(expVal - real(vec_res[i])) > tolerance){
+            std::cout << "Results don't match!" << std::endl;
+            exit(1);
+        }
+        */
+        printf("Expected: %.12f, Found: %.12f\n", expVal, real(vec_res[i]));
+    }
+
+}
+
+void testInner(){
     EncryptionParameters parms(scheme_type::ckks);
     parms.set_poly_modulus_degree(8192);
     parms.set_coeff_modulus(CoeffModulus::Create(8192, { 60, 40, 40, 60 }));
@@ -253,6 +401,47 @@ int main(){
             break;
         }
     }
-   
+}
+
+int main(){
+        EncryptionParameters parms(scheme_type::ckks);
+    parms.set_poly_modulus_degree(8192);
+    parms.set_coeff_modulus(CoeffModulus::Create(8192, { 60, 40, 40, 60 }));
+
+    //SEALContext context(parms);
+    //auto context = SEALContext::Create(parms);
+    auto context = make_shared<SEALContext>(parms);
+
+    KeyGenerator keygen(*context);
+    auto secret_key = keygen.secret_key();
+    PublicKey public_key;
+    keygen.create_public_key(public_key);
+    GaloisKeys galois_keys;
+    keygen.create_galois_keys(galois_keys);
+    RelinKeys relin_keys;
+    keygen.create_relin_keys(relin_keys);
+
+    CKKSEncoder encoder(*context);
+    Encryptor encryptor(*context, public_key);
+    Decryptor decryptor(*context, secret_key);
+    Evaluator evaluator(*context);  
+
+    double scale = pow(2.0, 40);
+    double tolerance = 1e-1; // (10^-1)
+
+    ////////////////////////////////////////
+    // Tests
+    ////////////////////////////////////////
+
+    /*
+    cout << "Inner product test started." << endl;
+    testInner();
+    cout << "Inner product test finished." << endl;
+    */
+
+    cout << "Matrix vector multiplication test started." << endl;
+    matrixVectorMul(context, ref(public_key), ref(secret_key), ref(relin_keys), ref(galois_keys), ref(encoder), ref(encryptor), ref(evaluator), ref(decryptor), 8, scale, -1, tolerance);
+    cout << "Matrix vector multiplication test finished." << endl;
+
     return 0;
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -12,6 +13,9 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
+// ///////////////////////
+// Inner product
+// ///////////////////////
 func innerProduct(params ckks.Parameters, enc rlwe.Encryptor, dec rlwe.Decryptor, eval ckks.Evaluator, encoder ckks.Encoder,
 	slots int, tid int, tolerance float64) {
 	// Generate random vector
@@ -71,7 +75,7 @@ func innerProduct(params ckks.Parameters, enc rlwe.Encryptor, dec rlwe.Decryptor
 	}
 }
 
-func main() {
+func innerProduct_test() {
 	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
 		LogN:            13,
 		LogQ:            []int{60, 40, 40, 60},
@@ -169,4 +173,229 @@ func main() {
 		}
 
 	}
+}
+
+// ////////////////////
+// Matrix x Vector
+// ////////////////////
+func matrixVectorMul(rows int, slots int, params ckks.Parameters, enc rlwe.Encryptor, dec rlwe.Decryptor,
+	eval ckks.Evaluator, encoder ckks.Encoder, tid int, tolerance float64) {
+
+	//Column number = slots
+	cols := slots
+	//Use to generate random floats
+	r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(tid)))
+
+	//Decleare the matrix, rows number of rows
+	mat := make([][]float64, rows)
+	//Decleare the vector
+	vec := make([]float64, cols)
+
+	//Initialize the vector with random floats in (-1, 1)
+	for i := 0; i < cols; i++ {
+		valV := 2 * (r.Float64() - 0.5)
+		vec[i] = valV
+	}
+
+	//Initialize matrice with the values
+	for i := 0; i < rows; i++ {
+		//Allocate for every row
+		mat[i] = make([]float64, cols)
+
+		for j := 0; j < cols; j++ {
+			//Initialize the matrix with random vectors
+			valM := 2 * (r.Float64() - 0.5)
+			mat[i][j] = valM
+		}
+	}
+
+	//Turn float matrix into rlwe Ciphertexts
+	ctMat := make([]*rlwe.Ciphertext, rows)
+
+	var err error
+	for j := 0; j < rows; j++ {
+		ctRow := ckks.NewPlaintext(params, params.MaxLevel())
+		if err := encoder.Encode(mat[j], ctRow); err != nil {
+			panic(err)
+		}
+
+		//Now encrypt the row
+		ctMat[j], err = enc.EncryptNew(ctRow)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	//Encode and Encrypt the vector ----
+	//Encode vec into plaintext (pt)
+	pt := ckks.NewPlaintext(params, params.MaxLevel())
+	if err := encoder.Encode(vec, pt); err != nil {
+		panic(err)
+	}
+
+	//ciphertextVector (ctVec)
+	ctVec, err := enc.EncryptNew(pt)
+	if err != nil {
+		panic(err)
+	}
+
+	//Now do the multiplication -----
+	// innerResults matrix holds the inner products
+	// One hot encoded vectors to extract the inner products in desired slots
+	innerResults := make([]*rlwe.Ciphertext, rows)
+
+	//Place the inner results in one hot encoded manner inside innerResults[]
+	for i := 0; i < rows; i++ {
+		oneHotVec := make([]float64, cols)
+		oneHotVec[i] = 1.0 //Rest is zero for one hot encoded vector, now turn this into ciphertext
+		ptHot := ckks.NewPlaintext(params, params.MaxLevel())
+		if err := encoder.Encode(oneHotVec, ptHot); err != nil {
+			panic(err)
+		}
+		ctHot, err := enc.EncryptNew(ptHot)
+		if err != nil {
+			panic(err)
+		}
+
+		//Multiply before log rotations and summation
+		mult, err := eval.MulRelinNew(ctMat[i], ctVec)
+		if err != nil {
+			panic(err)
+		}
+		//Rescale
+		result := ckks.NewCiphertext(params, 1, mult.Level()-1) //This will hold the result of the inner product in its slots
+		if err := eval.Rescale(mult, result); err != nil {
+			panic(err)
+		}
+
+		//Now calculate the inner product of ctMat[i], ctHot using mult
+		rotated := result.CopyNew()
+
+		//Calculate inner product result at the [0] with log rotations and sums
+		for i := 1; i < slots; i *= 2 {
+			if err := eval.Rotate(result, i, rotated); err != nil {
+				panic(err)
+			}
+			if err := eval.Add(result, rotated, result); err != nil {
+				panic(err)
+			}
+		}
+
+		//Now extract the i th position with one hot encoded vector
+		rowRes, err := eval.MulRelinNew(result, ctHot)
+		if err != nil {
+			panic(err)
+		}
+		rowRes_ := ckks.NewCiphertext(params, 1, rowRes.Level()-1)
+		if err := eval.Rescale(rowRes, rowRes_); err != nil {
+			panic(err)
+		}
+
+		innerResults[i] = rowRes_
+	}
+
+	//Now do the treewise summation
+	//Multiplication Result
+	mulRes, err := treewiseSum(&eval, innerResults)
+	if err != nil {
+		fmt.Println(mulRes.Level())
+		panic(err)
+	}
+
+	//Decode and Decrypt
+	vec_res := make([]float64, rows)
+
+	pt_res := ckks.NewPlaintext(params, mulRes.Level())
+	dec.Decrypt(mulRes, pt_res)
+	if err := encoder.Decode(pt_res, vec_res); err != nil {
+		panic(err)
+	}
+
+	for i := 0; i < rows; i++ {
+
+		expVal := 0.0
+		for j := 0; j < cols; j++ {
+			expVal += mat[i][j] * vec[j]
+		}
+		/*
+			if math.Abs(expVal-vec_res[i]) > tolerance {
+				log.Fatalf("TID %d: mismatch! expected %.4f, got %.4f",vec[i], tolerance, res)
+			}
+		*/
+		//fmt.Println(math.Abs(expVal - vec_res[i]))
+		fmt.Printf("Expected: %.6f, Found: %.6f\n", expVal, vec_res[i])
+	}
+}
+func treewiseSum(eval *ckks.Evaluator, cts []*rlwe.Ciphertext) (*rlwe.Ciphertext, error) {
+	if len(cts) == 0 {
+		return nil, errors.New("empty ciphertext slice")
+	}
+
+	for len(cts) > 1 {
+		var nextLevel []*rlwe.Ciphertext
+
+		for i := 0; i < len(cts); i += 2 {
+			if i+1 < len(cts) {
+				// Add pairs
+				sum, err := eval.AddNew(cts[i], cts[i+1])
+				if err != nil {
+					return nil, err
+				}
+				nextLevel = append(nextLevel, sum)
+			} else {
+				// This element has no match for binary sum, carry to next level
+				nextLevel = append(nextLevel, cts[i])
+			}
+		}
+
+		cts = nextLevel
+	}
+
+	return cts[0], nil
+}
+
+func main() {
+	/*
+		fmt.Println("Inner product test started.")
+		innerProduct_test()
+		fmt.Println("Inner product test finished.")
+	*/
+
+	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+		LogN:            13,
+		LogQ:            []int{60, 40, 40, 60},
+		LogP:            []int{61},
+		LogDefaultScale: 40,
+	})
+	if err != nil {
+		panic(err)
+	}
+	logSlots := params.LogMaxSlots()
+	slots := 1 << logSlots
+	fmt.Println("Slot count: ", slots)
+	//scale := params.DefaultScale().Value
+
+	//Generate the keys according to the params
+	kgen := rlwe.NewKeyGenerator(params)
+	sk := kgen.GenSecretKeyNew()
+	pk := kgen.GenPublicKeyNew(sk)
+	rlk := kgen.GenRelinearizationKeyNew(sk)
+	//Generate rotation keys
+	rotations := make([]uint64, 0)
+	for i := 1; i < slots; i *= 2 {
+		rotations = append(rotations, params.GaloisElement(i))
+	}
+	gk := kgen.GenGaloisKeysNew(rotations, sk)
+
+	enc := rlwe.NewEncryptor(params, pk)
+	dec := rlwe.NewDecryptor(params, sk)
+	eval := ckks.NewEvaluator(params, rlwe.NewMemEvaluationKeySet(rlk, gk...))
+	encoder := ckks.NewEncoder(params)
+
+	tolerance := 1.0 //CHANGE THIS MECHANISM
+
+	fmt.Println("Matrix vector multiplication test started.")
+	matrixVectorMul(8, slots, params, *enc, *dec, *eval, *encoder, -1, tolerance)
+	fmt.Println("Matrix vector multiplication test finished.")
+
 }
