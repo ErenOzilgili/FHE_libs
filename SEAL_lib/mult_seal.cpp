@@ -195,7 +195,7 @@ void matrixVectorMul(shared_ptr<SEALContext> context,
 }
 */
 
-void matrixVectorMul(shared_ptr<SEALContext> context,
+vector<double> matrixVectorMul(shared_ptr<SEALContext> context,
                 PublicKey &public_key,
                     SecretKey &secret_key,
                     RelinKeys &relin_keys,
@@ -283,16 +283,7 @@ void matrixVectorMul(shared_ptr<SEALContext> context,
     vector<double> vec_res(rows);
     encoder.decode(ptRes, vec_res, local_pool);
 
-    for(int i = 0; i < rows; i++){
-        double expVal = 0;
-
-        for(int j = 0; j < cols; j++){
-            expVal += mat[i][j] * vec[j];
-        }
-
-        printf("Expected: %.12f, Found: %.12f\n", expVal, real(vec_res[i]));
-    }
-
+    return vec_res;
 }
 
 void matrixVectorMul_(shared_ptr<SEALContext> context,

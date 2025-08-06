@@ -1,0 +1,228 @@
+#include "examples.h"
+
+using namespace std;
+using namespace seal;
+
+void bench(shared_ptr<SEALContext> context,
+                  PublicKey &public_key,
+                    SecretKey &secret_key,
+                    RelinKeys &relin_keys,
+                    GaloisKeys &galois_keys,
+
+                    CKKSEncoder &encoder,
+                    Encryptor &encryptor,
+                    Evaluator &evaluator,
+                    Decryptor &decryptor,
+
+                    int innerProNo,
+                    double scale,
+                
+                    const vector<double>& input_vec,
+                    vector<double>& out_res){
+    /*
+    Note that, only the underlying pointer is passed and 
+    secret_key, relin_keys, galois_keys, etc. are not copied 
+    throughout different threads
+    */
+    //Each thread uses its own local memory pool:
+    auto local_pool = MemoryPoolHandle::New();
+
+    //Obtain the slot count from the encoder object
+    size_t slotCount = encoder.slot_count();
+
+    //Vector which will be passed as the ckks vector
+    vector<double> input_vec(slotCount); //Of size polydegree / 2 = slot_count ---- polydegree = N, slot_count = N / 2
+
+    Plaintext plain;
+    encoder.encode(input_vec, scale, plain, local_pool);
+
+    Ciphertext encrypted;
+    encryptor.encrypt(plain, encrypted, local_pool);
+
+    //////////////////////////////////////////////////////////////
+    // Calculate inner product
+    //////////////////////////////////////////////////////////////
+
+    Ciphertext multiplied;
+    Ciphertext rotated;
+
+    //Multiply once and then relinearize to get the slotwise multiplication
+    evaluator.multiply(encrypted, encrypted, multiplied, local_pool);
+    evaluator.relinearize_inplace(multiplied, relin_keys, local_pool);
+    evaluator.rescale_to_next_inplace(multiplied, local_pool);
+
+    Ciphertext result = multiplied; //Copy the multiplied version
+    //Rotated now holds the correct multiplication result
+
+    //Now rotate and sum to obtain the inner product result at the first index
+    for(int steps = 1; steps < slotCount; steps *= 2){
+        evaluator.rotate_vector(result, steps, galois_keys, rotated, local_pool);
+        evaluator.add_inplace(result, rotated);
+    }
+
+    //Now decrypt and decode
+    Plaintext plain_result;
+    decryptor.decrypt(result, plain_result);
+
+    vector<double> output_result;
+    encoder.decode(plain_result, output_result, local_pool);
+    //Now the output_result[0] holds the result of the inner product.
+
+    out_res[innerProNo] = output_result[0];
+}
+
+int main(){
+    EncryptionParameters parms(scheme_type::ckks);
+    parms.set_poly_modulus_degree(8192);
+    parms.set_coeff_modulus(CoeffModulus::Create(8192, { 60, 40, 40, 60 }));
+
+    auto context = make_shared<SEALContext>(parms);
+
+    KeyGenerator keygen(*context);
+    auto secret_key = keygen.secret_key();
+    PublicKey public_key;
+    keygen.create_public_key(public_key);
+    GaloisKeys galois_keys;
+    keygen.create_galois_keys(galois_keys);
+    RelinKeys relin_keys;
+    keygen.create_relin_keys(relin_keys);
+
+    CKKSEncoder encoder(*context);
+    Encryptor encryptor(*context, public_key);
+    Decryptor decryptor(*context, secret_key);
+    Evaluator evaluator(*context);  
+
+    double scale = pow(2.0, 40);
+
+    //Initialize
+    ////////
+    //Obtain the slot count from the encoder object
+    int slotCount = encoder.slot_count();
+    vector<double> input_vec(slotCount); //Of size polydegree / 2 = slot_count ---- polydegree = N, slot_count = N / 2
+
+    double inputVecInnerRes = 0; //Hold the sum of the slots
+
+    random_device rd1;
+    mt19937 rng1(rd1());
+    uniform_real_distribution<double> dist1(-1.0, 1.0); 
+
+    for (auto &slot : input_vec){
+        slot = dist1(rng1);
+        inputVecInnerRes += (slot * slot);
+    }
+
+    vector<thread> workers1;
+    int num_worker_initial1 = 4;
+    int num_inner_initial1 = 4; //Number of inner products done (different randomly generated ciphertexts)
+
+    int iterationCount1 = 10;
+
+    bool doAcrossThreads1 = false; //Do in parallel or serial
+
+    for(int k = 0; k < 2; k++){
+        //Do with 4 and 8 cores
+        int num_worker1 = num_worker_initial1 * (int)(pow(2.0, k));
+
+        for(int j = 0; j < 10; j++){
+            int num_inner = num_inner_initial1 * (int)(pow(2.0, j));
+            cout << "-- Test Inner Product - "<< num_inner << " inner products in parallel" << endl; 
+
+            double elapsedOverLoops = 0; //Over the iterations, total time
+
+            double min_err_per = 100; //Minimum error percentage over the slots - 100 is reasonable because it will get smaller surely
+            double max_err_per = 0; //Maximum error percentage over the slots 
+
+            double min_err_amount = 100;
+            double max_err_amount = 0;
+
+            for(int k = 0; k < iterationCount1; k++){
+                vector<double> out_res(num_inner); //Record the results
+
+                double elapsed = 0;
+
+                if(doAcrossThreads1){//If across threads, enter here for benchmark
+                    workers1.clear();
+                    //Start timer
+                    auto t_start = chrono::high_resolution_clock::now();
+
+                    //Distrubute the work among threads (workers)
+                    for (int t = 0; t < num_worker1; t++) {
+                        workers1.emplace_back([&, t]() {
+                            for (int i = t; i < num_inner; i += num_worker1) {
+                                bench(context, ref(public_key), ref(secret_key), ref(relin_keys), ref(galois_keys), ref(encoder), ref(encryptor), ref(evaluator), ref(decryptor), i, scale, input_vec, out_res);
+                            }
+                        });
+                    }
+                    for (auto &t : workers1) {
+                        t.join();
+                    }
+
+                    //End timer
+                    auto t_end = chrono::high_resolution_clock::now();
+
+                    //Assign elapsed
+                    elapsed = chrono::duration<double>(t_end - t_start).count();
+
+                    for(int i = 0; i < num_inner; i++){
+                        //Error percentages per slot - find max and min
+                        double err_per = abs((inputVecInnerRes - out_res[i]) / inputVecInnerRes) * 100;
+                        double err_amount = abs(inputVecInnerRes - out_res[i]);
+
+                        if(err_per > max_err_per){
+                            max_err_per = err_per;
+                            max_err_amount = err_amount;
+                        }
+                        if(err_per < min_err_per){
+                            min_err_per = err_per;
+                            min_err_amount = err_amount;
+                        }
+                    }
+                }
+                else{
+                    //Start timer
+                    auto t_start = chrono::high_resolution_clock::now();
+
+                    for(int t = 0; t < num_inner; t++){
+                        bench(context, ref(public_key), ref(secret_key), ref(relin_keys), ref(galois_keys), ref(encoder), ref(encryptor), ref(evaluator), ref(decryptor), t, scale, input_vec, out_res);
+                        //bench(context, public_key, secret_key, relin_keys, galois_keys, scale, -1, tolerance);
+                    }
+
+                    //End timer
+                    auto t_end = chrono::high_resolution_clock::now();
+
+                    //Assign elapsed
+                    elapsed = chrono::duration<double>(t_end - t_start).count();
+
+                    for(int i = 0; i < num_inner; i++){
+                        //Error percentages per slot - find max and min
+                        double err_per = abs((inputVecInnerRes - out_res[i]) / inputVecInnerRes) * 100;
+                        double err_amount = abs(inputVecInnerRes - out_res[i]);
+
+                        if(err_per > max_err_per){
+                            max_err_per = err_per;
+                            max_err_amount = err_amount;
+                        }
+                        if(err_per < min_err_per){
+                            min_err_per = err_per;
+                            min_err_amount = err_amount;
+                        }
+                    }
+                }
+
+                elapsedOverLoops += elapsed;
+            }
+
+            cout << "\tAVERAGE TIME OVER ITERATIONS (" << num_worker1 << " threads): " << elapsedOverLoops / iterationCount1 << " seconds per iteration, total of " << iterationCount1 << " iterations." << endl;
+            //Below -- over iterations for a specific number of inner products made 
+            cout << "MAXIMUM ERROR PERCENTAGE: " << max_err_per << " with error amount: " << max_err_amount << endl;
+            cout << "MINIMUM ERROR PERCENTAGE: " << min_err_per << " with error amount: " << min_err_amount << endl;
+        }
+
+        if(!doAcrossThreads1){
+            break;
+        }
+    }
+
+    return 0;
+}
+

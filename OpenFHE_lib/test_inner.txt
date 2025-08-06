@@ -1,0 +1,189 @@
+void testInner() {
+    ////////////////////////////////////////
+    // Setup context
+    ////////////////////////////////////////
+    CCParams<CryptoContextCKKSRNS> parameters;
+
+    uint32_t ringDim = 8192;
+    uint32_t batchSize = ringDim / 2;
+    uint32_t dcrtBits = 40;
+    double tolerance = 1e-1;
+
+    parameters.SetMultiplicativeDepth(3);
+    parameters.SetBatchSize(batchSize); // N / 2 = ringDim / 2 = slotCount
+    parameters.SetRingDim(ringDim);
+    parameters.SetSecurityLevel(HEStd_NotSet); // disable security
+    parameters.SetScalingModSize(dcrtBits); // Bit precision --> Scale
+
+    CryptoContext<DCRTPoly> cc;
+    cc = GenCryptoContext(parameters);
+
+    /*
+    Following the example at (inner product example)
+    https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/inner-product.cpp
+    */
+    cc->Enable(PKE);
+    cc->Enable(LEVELEDSHE);
+    cc->Enable(KEYSWITCH);
+    cc->Enable(ADVANCEDSHE);
+
+    auto keyPair = cc->KeyGen();
+    cc->EvalMultKeyGen(keyPair.secretKey);
+
+    /*
+    We need to give the rotation steps (how many rotations) array to the cryptocontext object priorly
+    for Galois keys to be generated
+    */
+    int steps = 1;
+    int totalRotCount = (int)(log2(batchSize));
+    vector<int> rotationSteps(totalRotCount);
+    for(int i = 0; i < totalRotCount; i++){
+        rotationSteps[i] = steps;
+        steps *= 2;
+    }
+    cc->EvalAtIndexKeyGen(keyPair.secretKey, rotationSteps);
+
+    ////////////////////////////////////////
+    // Warm-up
+    ////////////////////////////////////////
+    /*
+    This is done due to below link
+    // TODO: link here
+    */
+    vector<double> dummy(batchSize, 1.0);
+    auto dummy_plain = cc->MakeCKKSPackedPlaintext(dummy);
+    auto dummy_enc = cc->Encrypt(keyPair.publicKey, dummy_plain);
+    auto dummy_eval = cc->EvalMult(dummy_enc, dummy_enc);
+
+    //Initialize
+    ////////
+    size_t slotCount = cc->GetRingDimension() / 2;
+
+    vector<double> input_vec(slotCount);
+    double inputVecInnerRes = 0;
+
+    random_device rd;
+    mt19937 rng(rd());
+    uniform_real_distribution<double> dist(-1.0, 1.0);
+
+    //Initialize the same vector to be used across threads
+    //inputVecInnerRes holds the expected inner product result
+    for (auto& slot : input_vec) {
+        slot = dist(rng);
+        inputVecInnerRes += slot * slot; //Compare with results to find error percentages
+    }
+    ///////////
+
+    //Worker number is set to 4 and 8 (physical - virtual # of cores for my pc specs)
+    vector<thread> workers;
+    int num_worker_initial = 4;
+    int num_inner_initial = 4; //Number of inner products done
+
+    int iterationCount = 10;
+
+    bool doAcrossThreads = true; //Do in parallel or serial
+
+    for(int k = 0; k < 2; k++){
+        //Do with powers of 2 starting with 4 threads (Single thread if flag is off)
+        int num_worker = num_worker_initial * (int)(pow(2.0, k));
+
+        //Number of inner products in parallel
+        for(int j = 0; j < 10; j++){
+            int num_inner = num_inner_initial * (int)(pow(2.0, j));
+            cout << "-- Test Inner Product - "<< num_inner << " inner products in parallel" << endl; 
+
+            double elapsedOverLoops = 0; //Over the iterations, total time
+
+            double min_err_per = 100; //Minimum error percentage over the slots - 100 is reasonable because it will get smaller surely
+            double max_err_per = 0; //Maximum error percentage over the slots 
+
+            double min_err_amount = 100;
+            double max_err_amount = 0;
+
+            //Number of iterations
+            for(int k = 0; k < iterationCount; k++){
+                vector<double> out_res(num_inner); //Record the results
+
+                double elapsed = 0;
+
+                if(doAcrossThreads){//If across threads, enter here for benchmark
+                    workers.clear();
+                    //Start timer
+                    auto t_start = chrono::high_resolution_clock::now();
+
+                    for (int t = 0; t < num_worker; t++) {
+                        workers.emplace_back([&, t]() {
+                            for (int i = t; i < num_inner; i += num_worker) {
+                                innerProduct(cc, keyPair, i, tolerance, slotCount, input_vec, out_res);
+                            }
+                        });
+                    }
+
+                    for (auto& t : workers) {
+                        t.join();
+                    }
+
+                    auto t_end = chrono::high_resolution_clock::now();
+                    elapsed = chrono::duration<double>(t_end - t_start).count();
+
+                    for(int i = 0; i < num_inner; i++){
+                        //Error percentages per slot - find max and min
+                        double err_per = abs((inputVecInnerRes - out_res[i]) / inputVecInnerRes) * 100;
+                        double err_amount = abs(inputVecInnerRes - out_res[i]);
+
+                        if(err_per > max_err_per){
+                            max_err_per = err_per;
+                            max_err_amount = err_amount;
+                        }
+                        if(err_per < min_err_per){
+                            min_err_per = err_per;
+                            min_err_amount = err_amount;
+                        }
+                    }
+                }
+                else{
+                    //Start timer
+                    auto t_start = chrono::high_resolution_clock::now();
+
+                    // TODO: SINGLE THREAD
+                    for(int i = 0; i < num_inner; i++){
+                        innerProduct(cc, keyPair, i, tolerance, slotCount, input_vec, out_res);
+                    }
+
+                    //End timer
+                    auto t_end = chrono::high_resolution_clock::now();
+
+                    //Assign elapsed
+                    elapsed = chrono::duration<double>(t_end - t_start).count();
+
+                    for(int i = 0; i < num_inner; i++){
+                        //Error percentages per slot - find max and min
+                        double err_per = abs((inputVecInnerRes - out_res[i]) / inputVecInnerRes) * 100;
+                        double err_amount = abs(inputVecInnerRes - out_res[i]);
+
+                        if(err_per > max_err_per){
+                            max_err_per = err_per;
+                            max_err_amount = err_amount;
+                        }
+                        if(err_per < min_err_per){
+                            min_err_per = err_per;
+                            min_err_amount = err_amount;
+                        }
+                    }
+                }
+
+                elapsedOverLoops += elapsed;
+            }
+
+            cout << "\tAVERAGE TIME OVER ITERATIONS (" << num_worker << " threads): " << elapsedOverLoops / iterationCount << " seconds per iteration, total of " << iterationCount << " iterations." << endl;
+            //Below -- over iterations for a specific number of inner products made 
+            cout << "MAXIMUM ERROR PERCENTAGE: " << max_err_per << " with error amount: " << max_err_amount << endl;
+            cout << "MINIMUM ERROR PERCENTAGE: " << min_err_per << " with error amount: " << min_err_amount << endl;
+        }
+
+        if(!doAcrossThreads){
+            break;
+        }
+    }
+
+}

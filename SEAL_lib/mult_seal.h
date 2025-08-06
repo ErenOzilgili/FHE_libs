@@ -15,7 +15,7 @@ Ciphertext TreewiseSum(Evaluator &evaluator, vector<Ciphertext> &cts);
 Ciphertext TreewiseSum_(shared_ptr<SEALContext> context, Evaluator &evaluator, vector<Ciphertext> &cts);
 
 // Matrix-vector multiplication using CKKS scheme
-void matrixVectorMul(shared_ptr<SEALContext> context,
+vector<double> matrixVectorMul(shared_ptr<SEALContext> context,
                      PublicKey &public_key,
                      SecretKey &secret_key,
                      RelinKeys &relin_keys,

@@ -1,0 +1,172 @@
+package main
+
+import (
+	"fmt"
+	"math"
+	"math/rand"
+	"sync"
+	"time"
+
+	"github.com/tuneinsight/lattigo/v6/core/rlwe"
+	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
+)
+
+func main() {
+	/*
+		fmt.Println("Inner product test started.")
+		innerProduct_test()
+		fmt.Println("Inner product test finished.")
+	*/
+
+	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+		LogN:            13,
+		LogQ:            []int{60, 40, 40, 60},
+		LogP:            []int{61},
+		LogDefaultScale: 40,
+	})
+	if err != nil {
+		panic(err)
+	}
+	logSlots := params.LogMaxSlots()
+	slots := 1 << logSlots
+	fmt.Println("Slot count: ", slots)
+	//scale := params.DefaultScale().Value
+
+	//Generate the keys according to the params
+	kgen := rlwe.NewKeyGenerator(params)
+	sk := kgen.GenSecretKeyNew()
+	pk := kgen.GenPublicKeyNew(sk)
+	rlk := kgen.GenRelinearizationKeyNew(sk)
+	//Generate rotation keys
+	rotations := make([]uint64, 0)
+	for i := 1; i < slots; i *= 2 {
+		rotations = append(rotations, params.GaloisElement(i))
+	}
+	gk := kgen.GenGaloisKeysNew(rotations, sk)
+
+	enc := rlwe.NewEncryptor(params, pk)
+	dec := rlwe.NewDecryptor(params, sk)
+	eval := ckks.NewEvaluator(params, rlwe.NewMemEvaluationKeySet(rlk, gk...))
+	encoder := ckks.NewEncoder(params)
+
+	//Use to generate random floats
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// The dimensionsfor matrix vector multiplication matrix x vector:
+	// (rows -by- rows, poly_modulus_degree / 2) x (poly_modulus_degree / 2 -by- 1)
+	rows := 12
+	cols := params.MaxSlots()
+	fmt.Println(cols)
+
+	//Decleare the matrix, rows number of rows
+	mat := make([][]float64, rows)
+	//Decleare the vector
+	vec := make([]float64, cols)
+
+	//Initialize the vector with random floats in (-1, 1)
+	for i := 0; i < cols; i++ {
+		valV := 2 * (r.Float64() - 0.5)
+		vec[i] = valV
+	}
+
+	//Initialize matrice with the values
+	for i := 0; i < rows; i++ {
+		//Allocate for every row
+		mat[i] = make([]float64, cols)
+
+		for j := 0; j < cols; j++ {
+			//Initialize the matrix with random vectors
+			valM := 2 * (r.Float64() - 0.5)
+			mat[i][j] = valM
+		}
+	}
+
+	// FOr thread to record their respective results
+	results := make([]*rlwe.Ciphertext, rows)
+
+	tolerance := 1.0 //CHANGE THIS MECHANISM
+
+	doParallel := true
+	numWorkerInitial := 4
+
+	var numWorker int
+
+	for k := 0; k < 2; k++ {
+		//Do with 4 and 8 cores
+		numWorker = numWorkerInitial * int(math.Pow(2.0, float64(k)))
+
+		//Start the timer before distributing into goroutines
+		start := time.Now()
+
+		if doParallel {
+			var wg sync.WaitGroup
+			for w := 0; w < numWorker; w++ {
+				wg.Add(1)
+				go func(wid int) {
+					defer wg.Done()
+
+					// Safe shallow copies for this goroutine
+					encoderSh := encoder.ShallowCopy()
+					encSh := enc.ShallowCopy()
+					decSh := dec.ShallowCopy()
+					evalSh := eval.ShallowCopy()
+
+					for i := wid; i < rows; i += numWorker {
+						MatrixVectorMul_(params, *encSh, *decSh, *evalSh, *encoderSh,
+							results, mat[i], vec,
+							i, slots, wid, tolerance)
+					}
+				}(w)
+			}
+			wg.Wait()
+
+			//Sum the resulting ciphertexts treewise
+
+			mulRes, err := TreewiseSum(eval, results)
+			if err != nil {
+				fmt.Println(mulRes.Level())
+				panic(err)
+			}
+
+			//Decode and Decrypt
+			vec_res := make([]float64, rows)
+
+			pt_res := ckks.NewPlaintext(params, mulRes.Level())
+			dec.Decrypt(mulRes, pt_res)
+			if err := encoder.Decode(pt_res, vec_res); err != nil {
+				panic(err)
+			}
+
+			for i := 0; i < rows; i++ {
+
+				expVal := 0.0
+				for j := 0; j < cols; j++ {
+					expVal += mat[i][j] * vec[j]
+				}
+
+				//fmt.Println(math.Abs(expVal - vec_res[i]))
+				fmt.Printf("Expected: %.6f, Found: %.6f\n", expVal, vec_res[i])
+			}
+
+			fmt.Println("Done")
+
+		} else {
+			fmt.Println("TODO: Single thread")
+			//matrixVectorMul(params, *enc, *dec, *eval, *encoder, slots, -1, tolerance)
+
+		}
+
+		//Elapsed time
+		elapsed := time.Since(start)
+
+		//Print the results
+		if doParallel {
+			fmt.Printf("All threads finished.\n")
+		} else {
+			fmt.Printf("No threads.\n")
+		}
+		fmt.Printf("\tTotal time : %f\n\n", elapsed.Seconds())
+
+	}
+
+}

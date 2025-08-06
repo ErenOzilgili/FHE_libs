@@ -3,10 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
-	"math"
 	"math/rand"
-	"sync"
 	"time"
 
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
@@ -16,17 +13,19 @@ import (
 // ///////////////////////
 // Inner product
 // ///////////////////////
-func innerProduct(params ckks.Parameters, enc rlwe.Encryptor, dec rlwe.Decryptor, eval ckks.Evaluator, encoder ckks.Encoder,
-	slots int, tid int, tolerance float64) {
-	// Generate random vector
-	vec := make([]float64, slots)
-	var expected float64
-	r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(tid)))
-	for i := range vec {
-		val := 10 * (r.Float64() - 0.5)
-		vec[i] = val
-		expected += val * val
-	}
+func innerProduct_(params ckks.Parameters, enc rlwe.Encryptor, dec rlwe.Decryptor, eval ckks.Evaluator, encoder ckks.Encoder,
+	slots int, innerProNo int, vec []float64, vec_out []float64) {
+	/*
+		// Generate random vector
+		vec := make([]float64, slots)
+		var expected float64
+		r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(tid)))
+		for i := range vec {
+			val := 10 * (r.Float64() - 0.5)
+			vec[i] = val
+			expected += val * val
+		}
+	*/
 
 	// Encode
 	pt := ckks.NewPlaintext(params, params.MaxLevel())
@@ -63,18 +62,17 @@ func innerProduct(params ckks.Parameters, enc rlwe.Encryptor, dec rlwe.Decryptor
 	}
 
 	// Decrypt
+	vecRes := make([]float64, slots)
 	pt_res := ckks.NewPlaintext(params, result.Level())
 	dec.Decrypt(result, pt_res)
-	if err := encoder.Decode(pt_res, vec); err != nil {
+	if err := encoder.Decode(pt_res, vecRes); err != nil {
 		panic(err)
 	}
 
-	res := vec[0]
-	if math.Abs(res-expected) > tolerance {
-		log.Fatalf("TID %d: mismatch! expected %.4f, got %.4f", tid, expected, res)
-	}
+	vec_out[innerProNo] = vecRes[0]
 }
 
+/*
 func InnerProduct_test() {
 	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
 		LogN:            13,
@@ -114,11 +112,11 @@ func InnerProduct_test() {
 	var numWorker int
 	var numInner int
 
-	for k := 0; k < 2; k++ {
+	for k := 0; k < 4; k++ {
 		//Do with 4 and 8 cores
 		numWorker = numWorkerInitial * int(math.Pow(2.0, float64(k)))
 
-		for j := 0; j < 10; j++ {
+		for j := 2; j < 6; j++ {
 			numInner = numInnerInitial * int(math.Pow(2.0, float64(j)))
 
 			//Start the timer before distributing into goroutines
@@ -174,13 +172,13 @@ func InnerProduct_test() {
 
 	}
 }
+*/
 
 // ////////////////////
 // Matrix x Vector
 // ////////////////////
-/*
 func matrixVectorMul(rows int, slots int, params ckks.Parameters, enc rlwe.Encryptor, dec rlwe.Decryptor,
-	eval ckks.Evaluator, encoder ckks.Encoder, tid int, tolerance float64) {
+	eval ckks.Evaluator, encoder ckks.Encoder, tid int) []float64 {
 
 	//Column number = slots
 	cols := slots
@@ -297,7 +295,7 @@ func matrixVectorMul(rows int, slots int, params ckks.Parameters, enc rlwe.Encry
 
 	//Now do the treewise summation
 	//Multiplication Result
-	mulRes, err := treewiseSum(&eval, innerResults)
+	mulRes, err := TreewiseSum(&eval, innerResults)
 	if err != nil {
 		fmt.Println(mulRes.Level())
 		panic(err)
@@ -312,18 +310,8 @@ func matrixVectorMul(rows int, slots int, params ckks.Parameters, enc rlwe.Encry
 		panic(err)
 	}
 
-	for i := 0; i < rows; i++ {
-
-		expVal := 0.0
-		for j := 0; j < cols; j++ {
-			expVal += mat[i][j] * vec[j]
-		}
-
-		//fmt.Println(math.Abs(expVal - vec_res[i]))
-		fmt.Printf("Expected: %.6f, Found: %.6f\n", expVal, vec_res[i])
-	}
+	return vec_res
 }
-*/
 
 func MatrixVectorMul_(params ckks.Parameters, enc rlwe.Encryptor,
 	dec rlwe.Decryptor,
