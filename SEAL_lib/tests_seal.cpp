@@ -5,6 +5,118 @@
 using namespace std;
 using namespace seal;
 
+void benchmarkSingleThreadedSeal(shared_ptr<SEALContext> context, double scale)
+{
+    cout << "\n===== Single-Threaded Benchmarks (Avg over 10 runs) =====" << endl;
+
+    chrono::high_resolution_clock::time_point start;
+    chrono::duration<double> elapsed;
+    double total;
+
+    int iterations = 10;
+    EncryptionParameters parms = context->first_context_data()->parms();
+    CKKSEncoder encoder(*context);
+    int slots = encoder.slot_count();
+
+    // -- KeyGen (sk + pk)
+    total = 0;
+    for (int i = 0; i < iterations; i++) {
+        KeyGenerator keygen(*context);
+        start = chrono::high_resolution_clock::now();
+        auto sk = keygen.secret_key();
+        PublicKey pk;
+        keygen.create_public_key(pk);
+        elapsed = chrono::high_resolution_clock::now() - start;
+        total += elapsed.count();
+    }
+    cout << "Average KeyGen (sk + pk): " << total / iterations << " sec" << endl;
+
+    // -- RelinKeyGen
+    KeyGenerator keygen(*context);
+    SecretKey sk = keygen.secret_key();
+    total = 0;
+    for (int i = 0; i < iterations; i++) {
+        start = chrono::high_resolution_clock::now();
+        RelinKeys relin_keys;
+        keygen.create_relin_keys(relin_keys);
+        elapsed = chrono::high_resolution_clock::now() - start;
+        total += elapsed.count();
+    }
+    cout << "Average RelinKeyGen: " << total / iterations << " sec" << endl;
+
+    // -- GaloisKeyGen (log steps)
+    vector<int> steps;
+    for (int i = 1; i < slots; i <<= 1)
+        steps.push_back(i);
+
+    total = 0;
+    for (int i = 0; i < iterations; i++) {
+        start = chrono::high_resolution_clock::now();
+        GaloisKeys galois_keys;
+        keygen.create_galois_keys(steps, galois_keys);
+        elapsed = chrono::high_resolution_clock::now() - start;
+        total += elapsed.count();
+    }
+    cout << "Average RotationKeyGen: " << total / iterations << " sec" << endl;
+
+    // Setup encoder/encryptor/evaluator/decryptor
+    PublicKey pk;
+    keygen.create_public_key(pk);
+    Encryptor encryptor(*context, pk);
+    Evaluator evaluator(*context);
+    Decryptor decryptor(*context, sk);
+
+    // Prepare input vector
+    vector<double> input(slots);
+    mt19937 rng(time(0));
+    uniform_real_distribution<double> dist(-1.0, 1.0);
+    for (auto &val : input)
+        val = dist(rng);
+
+    Plaintext pt;
+    encoder.encode(input, scale, pt);
+
+    // -- Encryption
+    total = 0;
+    for (int i = 0; i < iterations; i++) {
+        start = chrono::high_resolution_clock::now();
+        Ciphertext ct;
+        encryptor.encrypt(pt, ct);
+        elapsed = chrono::high_resolution_clock::now() - start;
+        total += elapsed.count();
+    }
+    cout << "Average Encryption: " << total / iterations << " sec" << endl;
+
+    // Prepare ciphertexts for add/rotate
+    Ciphertext ct1, ct2;
+    encryptor.encrypt(pt, ct1);
+    encryptor.encrypt(pt, ct2);
+
+    // -- Addition
+    total = 0;
+    for (int i = 0; i < iterations; i++) {
+        start = chrono::high_resolution_clock::now();
+        Ciphertext result;
+        evaluator.add(ct1, ct2, result);
+        elapsed = chrono::high_resolution_clock::now() - start;
+        total += elapsed.count();
+    }
+    cout << "Average Addition: " << total / iterations << " sec" << endl;
+
+    // -- Rotation
+    GaloisKeys galois_keys;
+    keygen.create_galois_keys(steps, galois_keys);  // rotate by 1
+    total = 0;
+    for (int i = 0; i < iterations; i++) {
+        start = chrono::high_resolution_clock::now();
+        Ciphertext rotated;
+        evaluator.rotate_vector(ct1, (int)(pow(2.0, i)), galois_keys, rotated);
+        elapsed = chrono::high_resolution_clock::now() - start;
+        total += elapsed.count();
+    }
+    cout << "Average Rotation: " << total / iterations << " sec" << endl;
+}
+
 
 int main(){
     //////////////////////////////
@@ -15,19 +127,19 @@ int main(){
     // 192-bit Security Params
     /////////////////////////////////
 
-    /*
     int poly_modulus_degree = 1 << 13;
     EncryptionParameters parms(scheme_type::ckks);
     parms.set_poly_modulus_degree(poly_modulus_degree);
     parms.set_coeff_modulus(CoeffModulus::Create(poly_modulus_degree, {41, 33, 33 ,33}));
     //Scale = 2^32
-    */
 
+    /*
     int poly_modulus_degree = 1 << 14;
     EncryptionParameters parms(scheme_type::ckks);
     parms.set_poly_modulus_degree(poly_modulus_degree);
     parms.set_coeff_modulus(CoeffModulus::Create(poly_modulus_degree, {45, 40, 40 ,40, 40, 40, 40}));
     //Scale = 2^40
+    */
 
     /////////////////////////////////
     // 128-bit Security Params
@@ -37,8 +149,8 @@ int main(){
     EncryptionParameters parms(scheme_type::ckks);
     parms.set_poly_modulus_degree(poly_modulus_degree);
     parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
-    */
     //scale = 2^42;
+    */
     /*
         Coefficient modulus primes:
         8796092858369 (bit-length: 43)
@@ -69,9 +181,8 @@ int main(){
     */
 
     //Scale Value
-    double scale = pow(2.0, 40);
+    double scale = pow(2.0, 32);
     double tolerance = 1e-1; // (10^-1)
-
 
     // Print the primes in the coeff_modulus
     cout << "Coefficient modulus primes:" << endl;
@@ -124,15 +235,15 @@ int main(){
     int num_worker_initial1 = 4;
     int num_inner_initial1 = 4; //Number of inner products done (different randomly generated ciphertexts)
 
-    int iterationCount1 = 2;
+    int iterationCount1 = 5;
 
     bool doAcrossThreads1 = true; //Do in parallel or serial
 
     for(int k = 0; k < 0; k++){
         //Do with 4 and 8 cores
-        int num_worker1 = num_worker_initial1 * (int)(pow(2.0, k));
+        int num_worker1 = doAcrossThreads1 ? num_worker_initial1 * (int)(pow(2.0, k)) : 1;
 
-        for(int j = 2; j < 6; j++){
+        for(int j = 2; j < 5; j++){
             int num_inner = num_inner_initial1 * (int)(pow(2.0, j));
             cout << "-- Test Inner Product - "<< num_inner << " inner products in parallel" << endl; 
 
@@ -158,7 +269,7 @@ int main(){
                     for (int t = 0; t < num_worker1; t++) {
                         workers1.emplace_back([&, t]() {
                             for (int i = t; i < num_inner; i += num_worker1) {
-                                innerProduct_(context, ref(public_key), ref(secret_key), ref(relin_keys), ref(galois_keys), ref(encoder), ref(encryptor), ref(evaluator), ref(decryptor), i, scale, input_vec, out_res);
+                                innerProduct_(context, public_key, secret_key, relin_keys, galois_keys, encoder, encryptor, evaluator, decryptor, i, scale, input_vec, out_res);
                             }
                         });
                     }
@@ -236,7 +347,7 @@ int main(){
     
     // The dimensionsfor matrix vector multiplication matrix x vector:
     // (rows -by- rows, poly_modulus_degree / 2) x (poly_modulus_degree / 2 -by- 1)
-    int rows = 32; 
+    int rows = 64; 
     int cols = parms.poly_modulus_degree() / 2;
     int slots = cols;
 
@@ -262,12 +373,12 @@ int main(){
     vector<thread> workers2;
     int num_worker_initial2 = 4;
 
-    bool doAcrossThreads2 = true; //Do in parallel or serial
-    int iterationCount2 = 2;
+    bool doAcrossThreads2 = false; //Do in parallel or serial
+    int iterationCount2 = 5;
 
     cout << "\n-- Test Matrix Vector Multiplication - Matrix size --> " << rows << " x " << slots << " - Vector size --> " << slots << " x 1" << endl;
 
-    for(int k = 0; k < 4; k++){
+    for(int k = 0; k < 0; k++){
         //Do with powers of 2 starting with 4 threads (Single thread if flag is off)
         int num_worker2 = doAcrossThreads2 ? num_worker_initial2 * (int)(pow(2.0, k)) : 1;
 
@@ -296,7 +407,7 @@ int main(){
                     workers2.emplace_back([&, t]() {
                         for (int i = t; i < rows; i += num_worker2) {
                             matrixVectorMul_(context, 
-                                ref(public_key), ref(secret_key), ref(relin_keys), ref(galois_keys), ref(encoder), ref(encryptor), ref(evaluator), ref(decryptor), 
+                                public_key, secret_key, relin_keys, galois_keys, encoder, encryptor, evaluator, decryptor, 
                                 mat[i], vec, matOut, i, scale, t, tolerance);
                 
                         }
@@ -305,7 +416,6 @@ int main(){
                 for (auto &t : workers2) {
                     t.join();
                 }
-
 
                 auto t_start_tree = chrono::high_resolution_clock::now();
                 //Now, use ciphertexts inside matOut to sum treewise in (parallel?) TODO:.
@@ -397,6 +507,8 @@ int main(){
         }
 
     }
+
+    benchmarkSingleThreadedSeal(context, scale);
 
     return 0;
 }

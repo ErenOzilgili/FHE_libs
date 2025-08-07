@@ -142,7 +142,8 @@ void matrixVectorMul_(CryptoContext<DCRTPoly> &cc,
 
 void matrixVectorMul(CryptoContext<DCRTPoly> &cc,
            KeyPair<DCRTPoly> &keyPair,
-           int rows, int slots, int tid, double tolerance){
+           int rows, int slots, int tid, double tolerance, 
+           vector<vector<double>>& mat){
 
     // # of Columns is equal to # of slots 
     int cols = slots;
@@ -152,7 +153,7 @@ void matrixVectorMul(CryptoContext<DCRTPoly> &cc,
     uniform_real_distribution<double> dist(-1.0, 1.0);
 
     // Declare matrix (rows x cols)
-    vector<vector<double>> mat(rows, vector<double>(cols));
+    //vector<vector<double>> mat(rows, vector<double>(cols));
 
     // Declare vector (size = cols)
     vector<double> vec(cols);

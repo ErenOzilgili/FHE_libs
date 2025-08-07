@@ -3,9 +3,11 @@ project(OpenFHE_lib LANGUAGES CXX)
 #tests_openFHE
 add_executable(tests_openFHE tests_openFHE.cpp mult_openFHE.cpp inner_openFHE.cpp)
 
+#find_package(Threads REQUIRED)
 target_link_libraries(tests_openFHE
     OPENFHEpke
     OPENFHEcore
+    #Threads::Threads
 )
 
 target_include_directories(tests_openFHE PRIVATE 

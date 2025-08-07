@@ -12,6 +12,92 @@
 using namespace lbcrypto;
 using namespace std;
 
+void benchmarkSingleThreadedOpenFHE(CryptoContext<DCRTPoly> cc) {
+    cout << "\n===== Single-Threaded Benchmarks (Avg over 10 runs) =====" << endl;
+
+    KeyPair<DCRTPoly> keyPair;
+
+    const size_t iterations = 10;
+    const size_t slots = cc->GetRingDimension() / 2;
+
+    vector<double> input(slots, 0.0);
+    mt19937 rng(time(0));
+    uniform_real_distribution<double> dist(-1.0, 1.0);
+    for (auto &v : input)
+        v = dist(rng);
+
+    auto pt = cc->MakeCKKSPackedPlaintext(input);
+
+    // -- KeyGen (sk + pk)
+    double total = 0;
+    for (size_t i = 0; i < iterations; i++) {
+        auto t_start = chrono::high_resolution_clock::now();
+        auto kp = cc->KeyGen();
+        auto t_end = chrono::high_resolution_clock::now();
+        total += chrono::duration<double>(t_end - t_start).count();
+    }
+    cout << "Average KeyGen (sk + pk): " << total / iterations << " sec" << endl;
+
+    //sk + pk
+    keyPair = cc->KeyGen();
+
+    // -- Relinearization KeyGen
+    total = 0;
+    for (size_t i = 0; i < iterations; i++) {
+        auto t_start = chrono::high_resolution_clock::now();
+        cc->EvalMultKeyGen(keyPair.secretKey);
+        auto t_end = chrono::high_resolution_clock::now();
+        total += chrono::duration<double>(t_end - t_start).count();
+    }
+    cout << "Average RelinKeyGen: " << total / iterations << " sec" << endl;
+
+    // -- Rotation KeyGen
+    vector<int32_t> rotationSteps;
+    for (int i = 1; i < slots; i <<= 1)
+        rotationSteps.push_back(i);
+
+    total = 0;
+    for (size_t i = 0; i < iterations; i++) {
+        auto t_start = chrono::high_resolution_clock::now();
+        cc->EvalAtIndexKeyGen(keyPair.secretKey, rotationSteps);
+        auto t_end = chrono::high_resolution_clock::now();
+        total += chrono::duration<double>(t_end - t_start).count();
+    }
+    cout << "Average RotationKeyGen: " << total / iterations << " sec" << endl;
+
+    // -- Encryption
+    total = 0;
+    for (size_t i = 0; i < iterations; i++) {
+        auto t_start = chrono::high_resolution_clock::now();
+        auto ct = cc->Encrypt(keyPair.publicKey, pt);
+        auto t_end = chrono::high_resolution_clock::now();
+        total += chrono::duration<double>(t_end - t_start).count();
+    }
+    cout << "Average Encryption: " << total / iterations << " sec" << endl;
+
+    // -- Addition
+    auto ct1 = cc->Encrypt(keyPair.publicKey, pt);
+    auto ct2 = cc->Encrypt(keyPair.publicKey, pt);
+    total = 0;
+    for (size_t i = 0; i < iterations; i++) {
+        auto t_start = chrono::high_resolution_clock::now();
+        auto sum = cc->EvalAdd(ct1, ct2);
+        auto t_end = chrono::high_resolution_clock::now();
+        total += chrono::duration<double>(t_end - t_start).count();
+    }
+    cout << "Average Addition: " << total / iterations << " sec" << endl;
+
+    // -- Rotation
+    total = 0;
+    for (size_t i = 0; i < iterations; i++) {
+        auto t_start = chrono::high_resolution_clock::now();
+        auto rot = cc->EvalAtIndex(ct1, (int)(pow(2.0, i)));
+        auto t_end = chrono::high_resolution_clock::now();
+        total += chrono::duration<double>(t_end - t_start).count();
+    }
+    cout << "Average Rotation (by 1): " << total / iterations << " sec" << endl;
+}
+
 int main(){
     ////////////////////////////////////////
     // Setup context
@@ -34,13 +120,12 @@ int main(){
     parameters.SetFirstModSize(44);
     */
 
-
-    uint32_t ringDim = 16384; 
+    uint32_t ringDim = 8192; 
     uint32_t batchSize = ringDim / 2;
     double tolerance = 1e-1;
 
-    //192-bit N = 16384
     /*
+    //192-bit N = 16384
     parameters.SetBatchSize(batchSize);
     parameters.SetRingDim(ringDim);
     parameters.SetMultiplicativeDepth(6);
@@ -50,14 +135,12 @@ int main(){
     */
 
     //192-bit N = 8192
-    /*
     parameters.SetBatchSize(batchSize);
     parameters.SetRingDim(ringDim);
     parameters.SetMultiplicativeDepth(3);
     parameters.SetScalingModSize(33);      
     parameters.SetFirstModSize(41);
     parameters.SetSecurityLevel(HEStd_NotSet); // disable security
-    */
 
     //128 bit N = 8192
     /*
@@ -65,17 +148,19 @@ int main(){
     parameters.SetRingDim(8192);
     parameters.SetMultiplicativeDepth(4);
     parameters.SetScalingModSize(44);      
-    parameters.SetFirstModSize(43);
+    parameters.SetFirstModSize(45);
     parameters.SetSecurityLevel(HEStd_NotSet); // disable security
     */
 
     //128-bit N = 16384
+    /*
     parameters.SetBatchSize(8192);
     parameters.SetRingDim(16384);
     parameters.SetMultiplicativeDepth(8);
     parameters.SetScalingModSize(48);      
     parameters.SetFirstModSize(49);
     parameters.SetSecurityLevel(HEStd_NotSet); // disable security
+    */
 
     CryptoContext<DCRTPoly> cc;
     cc = GenCryptoContext(parameters);
@@ -156,16 +241,16 @@ int main(){
     int num_worker_initial1 = 4;
     int num_inner_initial1 = 4; //Number of inner products done
 
-    int iterationCount1 = 2;
+    int iterationCount1 = 5;
 
     bool doAcrossThreads1 = true; //Do in parallel or serial
 
     for(int k = 0; k < 0; k++){
         //Do with powers of 2 starting with 4 threads (Single thread if flag is off)
-        int num_worker1 = num_worker_initial1 * (int)(pow(2.0, k));
+        int num_worker1 = doAcrossThreads1 ? num_worker_initial1 * (int)(pow(2.0, k)) : 1;
 
         //Number of inner products in parallel
-        for(int j = 2; j < 6; j++){
+        for(int j = 2; j < 5; j++){
             int num_inner = num_inner_initial1 * (int)(pow(2.0, j));
             cout << "-- Test Inner Product - "<< num_inner << " inner products in parallel" << endl; 
 
@@ -274,7 +359,7 @@ int main(){
     */
     ////////////////////
 
-    int rows = 64; //Matrix rows
+    int rows = 16; //Matrix rows
     int slots = parameters.GetBatchSize(); //Slots per ciphertext
     int cols = slots;
 
@@ -310,11 +395,11 @@ int main(){
     int num_worker_initial2 = 4;
 
     bool doAcrossThreads2 = true; //Do in parallel or serial
-    int iterationCount2 = 2;
+    int iterationCount2 = 5;
 
     cout << "\n-- Test Matrix Vector Multiplication - Matrix size --> " << rows << " x " << slots << " - Vector size --> " << slots << " x 1" << endl;
 
-    for(int k = 0; k < 4; k++){
+    for(int k = 0; k < 0; k++){
         //Do with powers of 2 starting with 4 threads (Single thread if flag is off)
         int num_worker2 = doAcrossThreads2 ? num_worker_initial2 * (int)(pow(2.0, k)) : 1;
 
@@ -395,6 +480,7 @@ int main(){
                 //Start timer
                 auto t_start = chrono::high_resolution_clock::now();
 
+
                 //SINGLE THREAD
                 //cout << "TODO: SINGLE THREAD!" << endl;
 
@@ -415,6 +501,8 @@ int main(){
             break;
         }
     }
+
+    benchmarkSingleThreadedOpenFHE(cc);
 
     return 0;
 }

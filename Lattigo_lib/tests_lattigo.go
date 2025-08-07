@@ -11,6 +11,101 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
+func benchmarkSingleThreaded(params ckks.Parameters, slots int) {
+	fmt.Println("===== Single-Threaded Benchmarks (Avg over 10 runs) =====")
+
+	kgen := rlwe.NewKeyGenerator(params)
+	var elapsed float64
+
+	// -- KeyGen
+	elapsed = 0.0
+	for i := 0; i < 10; i++ {
+		start := time.Now()
+		sk := kgen.GenSecretKeyNew()
+		_ = kgen.GenPublicKeyNew(sk)
+		elapsed += time.Since(start).Seconds()
+	}
+	fmt.Printf("Average KeyGen (sk + pk): %.6f sec\n", elapsed/10)
+
+	// -- RelinKeyGen
+	sk := kgen.GenSecretKeyNew()
+	elapsed = 0.0
+	for i := 0; i < 10; i++ {
+		start := time.Now()
+		_ = kgen.GenRelinearizationKeyNew(sk)
+		elapsed += time.Since(start).Seconds()
+	}
+	fmt.Printf("Average RelinKeyGen: %.6f sec\n", elapsed/10)
+
+	// -- RotationKeyGen
+	rotations := []uint64{}
+	for i := 1; i < slots; i <<= 1 {
+		rotations = append(rotations, params.GaloisElement(i))
+	}
+	elapsed = 0.0
+	for i := 0; i < 10; i++ {
+		start := time.Now()
+		_ = kgen.GenGaloisKeysNew(rotations, sk)
+		elapsed += time.Since(start).Seconds()
+	}
+	fmt.Printf("Average RotationKeyGen: %.6f sec\n", elapsed/10)
+
+	// Prepare for encryption/eval benchmarks
+	//CHECK HERE
+	pk := kgen.GenPublicKeyNew(sk)
+	enc := rlwe.NewEncryptor(params, pk)
+	eval := ckks.NewEvaluator(params, rlwe.NewMemEvaluationKeySet(nil))
+	encoder := ckks.NewEncoder(params)
+
+	vec := make([]float64, slots)
+	for i := range vec {
+		vec[i] = 2 * (rand.Float64() - 0.5)
+	}
+	pt := ckks.NewPlaintext(params, params.MaxLevel())
+	encoder.Encode(vec, pt)
+
+	// -- Encryption
+	elapsed = 0.0
+	for i := 0; i < 10; i++ {
+		start := time.Now()
+		_, _ = enc.EncryptNew(pt)
+		elapsed += time.Since(start).Seconds()
+	}
+	fmt.Printf("Average Encryption: %.6f sec\n", elapsed/10)
+
+	// Prepare 2 ciphertexts for addition
+	var ct1, ct2 *rlwe.Ciphertext
+	var err error
+	if ct1, err = enc.EncryptNew(pt); err != nil {
+		panic(err)
+	}
+	if ct2, err = enc.EncryptNew(pt); err != nil {
+		panic(err)
+	}
+
+	// -- Addition
+	elapsed = 0.0
+	for i := 0; i < 10; i++ {
+		start := time.Now()
+		_, _ = eval.AddNew(ct1, ct2)
+		elapsed += time.Since(start).Seconds()
+	}
+	fmt.Printf("Average Addition: %.6f sec\n", elapsed/10)
+
+	// -- Rotation
+	// Generate Galois keys for rotation evaluator
+	gk := kgen.GenGaloisKeysNew([]uint64{params.GaloisElement(1)}, sk)
+	eval = ckks.NewEvaluator(params, rlwe.NewMemEvaluationKeySet(nil, gk...))
+
+	elapsed = 0.0
+	for i := 0; i < 10; i++ {
+		start := time.Now()
+		_, _ = eval.RotateNew(ct1, int(math.Pow(2.0, float64(i))))
+		elapsed += time.Since(start).Seconds()
+	}
+	fmt.Printf("Average Rotation: %.6f sec\n", elapsed/10)
+}
+
 func main() {
 
 	//////////////////////////////
@@ -20,40 +115,46 @@ func main() {
 	//128 bit - N = 8192
 	/*
 		params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
-			LogN:            13,
-			LogQ:            []int{43, 43, 44, 44},
-			LogP:            []int{44},
+			LogN: 13,
+			//LogQ:            []int{43, 43, 44, 44},
+			//LogP:            []int{44},
+
+			LogQ:            []int{43, 43, 44, 44, 44},
+			LogP:            []int{50},
 			LogDefaultScale: 42,
 		})
 	*/
 
 	//128 bit - N = 16384
-	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
-		LogN:            14,
-		LogQ:            []int{48, 48, 48, 49, 49, 49, 49, 49},
-		LogP:            []int{49},
-		LogDefaultScale: 47,
-	})
+	/*
+		params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+			LogN: 14,
+			LogQ: []int{48, 48, 48, 49, 49, 49, 49, 49, 49},
+			LogP: []int{55},
+
+			//LogQ:            []int{44, 44, 44, 43, 43, 43, 43, 43, 43},
+			//LogP:            []int{50},
+			LogDefaultScale: 48,
+		})
+	*/
 
 	//192 bit - N = 8192
 	/*
 		params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
 			LogN:            13,
-			LogQ:            []int{41, 33, 33},
-			LogP:            []int{33},
+			LogQ:            []int{41, 33, 33, 33},
+			LogP:            []int{45},
 			LogDefaultScale: 32,
 		})
 	*/
 
-	/*
-		//192 bit - N = 16384
-		params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
-			LogN:            14,
-			LogQ:            []int{45, 40, 40, 40, 40, 40},
-			LogP:            []int{40},
-			LogDefaultScale: 32,
-		})
-	*/
+	//192 bit - N = 16384
+	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+		LogN:            14,
+		LogQ:            []int{45, 40, 40, 40, 40, 40, 40},
+		LogP:            []int{55},
+		LogDefaultScale: 40,
+	})
 
 	if err != nil {
 		panic(err)
@@ -102,12 +203,12 @@ func main() {
 	doParallel := true
 	numWorkerInitial := 4
 	numInnerInitial := 4
-	iterationCount := 2
+	iterationCount := 5
 
-	for k := 0; k < 4; k++ {
+	for k := 0; k < 0; k++ {
 		numWorker := numWorkerInitial * int(math.Pow(2.0, float64(k)))
 
-		for j := 2; j < 6; j++ {
+		for j := 2; j < 5; j++ {
 			numInner := numInnerInitial * int(math.Pow(2.0, float64(j)))
 
 			fmt.Printf("-- Test Inner Product - %d inner products in parallel\n", numInner)
@@ -187,9 +288,10 @@ func main() {
 
 	// The dimensionsfor matrix vector multiplication matrix x vector:
 	// (rows -by- rows, poly_modulus_degree / 2) x (poly_modulus_degree / 2 -by- 1)
-	rows := 16
+	rows := 64
 	cols := params.MaxSlots()
 	fmt.Println(cols)
+	fmt.Println("Rows: ", rows)
 
 	//Decleare the matrix, rows number of rows
 	mat := make([][]float64, rows)
@@ -220,10 +322,10 @@ func main() {
 	doParallel2 := true
 	numWorkerInitial2 := 4
 
-	iterationCount2 := 2
+	iterationCount2 := 5
 	var numWorker2 int
 
-	for k := 0; k < 4; k++ {
+	for k := 0; k < 0; k++ {
 		numWorker2 = numWorkerInitial2 * int(math.Pow(2.0, float64(k)))
 		fmt.Printf("-- Test Matrix Vector Multiplication (%d threads)\n", numWorker2)
 
@@ -327,9 +429,11 @@ func main() {
 			}
 		}
 
-		fmt.Printf("\tAVERAGE TIME OVER ITERATIONS (%d threads): %.6f seconds per iteration\n", numWorker2, totalElapsed/float64(iterationCount2))
-		fmt.Printf("MAXIMUM ERROR PERCENTAGE: %.6f with error amount: %.6e\n", maxErrPercent, maxErrAmount)
-		fmt.Printf("MINIMUM ERROR PERCENTAGE: %.6f with error amount: %.6e\n", minErrPercent, minErrAmount)
-		fmt.Printf("Elapsed Treewise (avg): %.6f seconds.\n\n", totalTreewise/float64(iterationCount2))
+		fmt.Printf("\tAVERAGE TIME OVER ITERATIONS (%d threads): %.12f seconds per iteration\n", numWorker2, totalElapsed/float64(iterationCount2))
+		fmt.Printf("MAXIMUM ERROR PERCENTAGE: %e with error amount: %.6e\n", maxErrPercent, maxErrAmount)
+		fmt.Printf("MINIMUM ERROR PERCENTAGE: %e with error amount: %.6e\n", minErrPercent, minErrAmount)
+		fmt.Printf("Elapsed Treewise (avg): %e seconds.\n\n", totalTreewise/float64(iterationCount2))
 	}
+
+	benchmarkSingleThreaded(params, slots)
 }
